@@ -10,8 +10,10 @@ using System.Drawing;
 using System.Text;
 using System.Windows.Forms;
 using System.IO;
+using System.Linq;
+using System.Linq.Expressions;
 using Microsoft.Win32;
-
+using FormsDemo.Common;
 using Leadtools;
 using Leadtools.ImageProcessing;
 using Leadtools.WinForms;
@@ -28,12 +30,18 @@ using Leadtools.Demos.Dialogs;
 using Leadtools.Twain;
 using Leadtools.Barcode;
 using Leadtools.ImageProcessing.Core;
+using Newtonsoft.Json;
 using System.Diagnostics;
+using System.Security.Permissions;
+using Newtonsoft.Json.Linq;
 
 namespace FormsDemo
 {
+
    public partial class MainForm : Form
    {
+      private static NLog.Logger logger = NLog.LogManager.GetCurrentClassLogger();
+
 #if FOR_NUGET
       private readonly string NUGET_LIC_WARNING = "When using a LEADTOOLS 30-day, limited license file, LEADTOOLS will randomly watermark your images and documents." +
          " This may cause unexpected results in this demo. " +
@@ -64,12 +72,107 @@ namespace FormsDemo
       {
          InitializeComponent();
       }
-
+      
+      private static HashSet<string> DoneFormsSet = new HashSet<string>();
       [STAThread]
       static void Main()
       {
          if (!Support.SetLicense())
             return;
+         DoneFormsSet = File.ReadAllLines(@"F:\DoneForms.txt")
+            .Where(x => !string.IsNullOrEmpty(x))
+            .Select(l => l.Split('|')[3])
+            .Select(x => x.Split(' ').ToArray())
+            .Select(x => x.Skip(1).Take(x.Length - 2).ToArray())
+            .Select(x => string.Join(" ", x))
+            .ToHashSet();
+            //.Select(x => x.GetType()  " ".Join())
+            //.ToHashSet<string>();
+         var state = 0;
+         var keeper = new Dictionary<string, OcrRecord>();
+         OcrRecord curRecord = null;
+         var sb = new StringBuilder();
+         var lastline = "";
+         var currentMaster = "";
+         foreach (var line in File.ReadAllLines(@"F:\EC_logs.txt"))
+         {
+            switch (state)
+            {
+               case 0:
+                  if (line.Contains("|Recognized"))
+                  {
+                     var tup = OcrRecord.FindAppID(line);
+                     
+                     if (tup.Item3 > 0)
+                     {
+                        curRecord = OcrRecord.GetOrCreate(tup.Item1, keeper);
+                        curRecord.Files.Add(tup.Item2);
+                     }
+                     state = 1;
+                  }
+                  else if (line.Contains("|Unrecognized"))
+                  {
+                     var tup = OcrRecord.FindAppID(line);
+                     if (tup.Item3 > 0)
+                     {
+                        curRecord = OcrRecord.GetOrCreate(tup.Item1, keeper);
+                        curRecord.Files.Add(tup.Item2);
+                     }
+                     state = 0;
+                  }
+
+                  break;
+               case 1:
+                  if (line.StartsWith("["))
+                  {
+                     currentMaster = lastline;
+                     Debug.Assert(curRecord != null, nameof(curRecord) + " != null");
+                     curRecord.MasterForms.Add(currentMaster);
+
+                     sb = new StringBuilder();
+                     //sb.Append(line);
+                     sb.AppendLine(line);
+                     state = 2;
+                  }
+
+                  break;
+               case 2:
+                  sb.AppendLine(line);
+                  if (line.StartsWith("]"))
+                  {
+                     //File.WriteAllText(@"F:\samp.json", sb.ToString());
+                     var jArray = Newtonsoft.Json.Linq.JArray.Parse(sb.ToString());
+                     //Debug.WriteLine(jArray.Count);
+                     foreach (var jToken in jArray)
+                     {
+                        var name = jToken.Value<string>("Name");
+                        var bounds = jToken.Value<string>("Bounds");
+                        var res = jToken["ResultDefault"];
+                        if (res != null)
+                        {
+                           var f = new OcrField(name, "text", bounds, res);
+                           Debug.Assert(curRecord != null, nameof(curRecord) + " != null");
+                           curRecord.AddField(f);
+                        }
+                        else
+                        {
+                           res = jToken["Result"];
+                           var f = new OcrField(name, "omr", bounds, res);
+                           Debug.Assert(curRecord != null, nameof(curRecord) + " != null");
+                           curRecord.AddField(f);
+                        }
+                     }
+                     //sb.Append(line);
+                     state = 0;
+                  }
+
+                  break;
+            }
+
+            lastline = line;
+         }
+
+         File.WriteAllText(@"F:\EC_sample_OCR.json", JsonConvert.SerializeObject(keeper.Values,Formatting.Indented));
 
          Boolean bLocked = RasterSupport.IsLocked(RasterSupportType.Forms);
          if (bLocked)
@@ -175,7 +278,7 @@ namespace FormsDemo
       {
          string formsDir;
          if (_rb_OCR.Checked == true)
-            formsDir = DemosGlobal.ImagesFolder + "\\" + @"Forms\MasterForm Sets\OCR";
+            formsDir = DemosGlobal.ImagesFolder + "\\" + @"Forms\MasterForm Sets\Page1";
          else if (_rb_OCR_ICR.Checked == true)
             formsDir = DemosGlobal.ImagesFolder + "\\" + @"Forms\MasterForm Sets\OCR_ICR";
          else if (_rb_DL.Checked == true)
@@ -215,7 +318,7 @@ namespace FormsDemo
                if (fbd.ShowDialog(this) == DialogResult.OK)
                {
                   canceled = false;
-                  string[] files = Directory.GetFiles(fbd.SelectedPath);
+                  string[] files = Directory.GetFiles(fbd.SelectedPath).Where(x => !DoneFormsSet.Contains(x)).ToArray();
                   AddOperationTime(null, null, TimeSpan.Zero, true);
                   List<FilledForm> recognizedForms = new List<FilledForm>();
                   foreach (string file in files)
@@ -354,7 +457,8 @@ namespace FormsDemo
       {
          string formsDir;
          if (_rb_OCR.Checked == true)
-            formsDir = DemosGlobal.ImagesFolder + "\\" + @"Forms\Forms to be Recognized\OCR";
+            //formsDir = DemosGlobal.ImagesFolder + "\\" + @"Forms\Forms to be Recognized\OCR";
+            formsDir = @"F:\OCR\Page1";
          else if (_rb_OCR_ICR.Checked == true)
             formsDir = DemosGlobal.ImagesFolder + "\\" + @"Forms\Forms to be Recognized\OCR_ICR";
          else if (_rb_DL.Checked == true)
@@ -1090,10 +1194,34 @@ namespace FormsDemo
                AlignForm(form, false);
 
             ProcessForm(form);
+            logger.Info($"Recognized {form.FileName} {form.Master?.Properties.Name}");
+            SaveFields(form);
             //We have successfully recognized and processed a form
             return true;
          }
+         logger.Info($"Unrecognized {form.FileName} {form.Master?.Properties.Name}");
          return false;
+      }
+      public void SaveFields(FilledForm form)
+      {
+         var sb = new StringBuilder();
+         sb.Append(form.Name + "\n");
+         sb.Append(form.Master.Properties.Name + "\n");
+         if (form.ProcessingPages?[0] != null)
+         {
+            var fields = new FormField[form.ProcessingPages[0].Count];
+            int i = 0;
+            foreach (var field in form.ProcessingPages[0])
+            {
+               fields[i++] = field;
+            }
+            sb.Append(JsonConvert.SerializeObject(fields, Formatting.Indented));
+         }
+         else
+         {
+            sb.Append("No Fields found\n");
+         }
+         logger.Info(sb.ToString);
       }
 
       public MasterForm LoadMasterForm(string attributesFileName, string fieldsFileName)
@@ -1401,6 +1529,74 @@ namespace FormsDemo
       private void ManagerChange_Click(object sender, EventArgs e)
       {
          SetupRecognitionEngine();
+      }
+   }
+
+   public class OcrField
+   {
+      public string VariableName;
+      public string VariableType;
+      public string Text;
+      public int MaximumConfidence;
+      public int MinimumConfidence;
+      public int AverageConfidence;
+      public string Bounds;
+
+      public OcrField(string variableName, string variableType, string bounds, JToken res)
+      {
+         VariableName = variableName;
+         VariableType = variableType;
+         Bounds = bounds.TrimEnd('\r', '\n'); ;
+         Text = res.Value<string>("Text")?.TrimEnd('\r', '\n'); ;
+         MinimumConfidence = res.Value<int?>("MinimumConfidence") ?? -1;
+         MaximumConfidence = res.Value<int?>("MaximumConfidence") ?? -1;
+         AverageConfidence = res.Value<int?>("AverageConfidence") ?? -1;
+
+      }
+   }
+
+   public class OcrRecord
+   {
+      public string AppID;
+      public List<string> Files = new List<string>();
+      public List<string> UnrecognizedFiles = new List<string>();
+      public List<string> MasterForms = new List<string>();
+      public Dictionary<string, OcrField> Fields = new Dictionary<string, OcrField>();
+
+      public static OcrRecord GetOrCreate(string appId, Dictionary<string, OcrRecord> keeper)
+      {
+         if (keeper.ContainsKey(appId))
+         {
+            var prev = keeper[appId];
+            return prev;
+         }
+
+         var n = new OcrRecord()
+         {
+            AppID = appId
+         };
+         keeper[n.AppID] = n;
+         return n;
+       
+      }
+
+      public void AddField(OcrField f)
+      {
+         Fields[f.VariableName] = f;
+      }
+
+      public static Tuple<string, string, int> FindAppID(string recognized)
+      {
+         var p = recognized.Split(new string[] {@"Page1\"}, StringSplitOptions.None)[1]?.Split('.')[0]?.Split('_');
+         if (p == null || p.Length != 2)
+            return new Tuple<string, string, int>("not found", "not found", -1);
+         var file = string.Join("_", p);
+         var id = p[0];
+         if (Int32.TryParse(p[1], out var page))
+         {
+            return new Tuple<string, string, int>(id, file, page);
+         }
+         return new Tuple<string, string,  int>("bad page", file, -1);
       }
    }
 }

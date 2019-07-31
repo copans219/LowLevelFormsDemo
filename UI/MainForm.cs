@@ -458,7 +458,7 @@ namespace FormsDemo
          string formsDir;
          if (_rb_OCR.Checked == true)
             //formsDir = DemosGlobal.ImagesFolder + "\\" + @"Forms\Forms to be Recognized\OCR";
-            formsDir = @"F:\OCR\Page1";
+            formsDir = @"F:\OCR\Interesting";
          else if (_rb_OCR_ICR.Checked == true)
             formsDir = DemosGlobal.ImagesFolder + "\\" + @"Forms\Forms to be Recognized\OCR_ICR";
          else if (_rb_DL.Checked == true)
@@ -1541,17 +1541,18 @@ namespace FormsDemo
       public int MinimumConfidence;
       public int AverageConfidence;
       public string Bounds;
+      public string Summary;
 
       public OcrField(string variableName, string variableType, string bounds, JToken res)
       {
          VariableName = variableName;
          VariableType = variableType;
          Bounds = bounds.TrimEnd('\r', '\n'); ;
-         Text = res.Value<string>("Text")?.TrimEnd('\r', '\n'); ;
+         Text = res.Value<string>("Text")?.TrimEnd('\r', '\n') ?? ""; ;
          MinimumConfidence = res.Value<int?>("MinimumConfidence") ?? -1;
          MaximumConfidence = res.Value<int?>("MaximumConfidence") ?? -1;
          AverageConfidence = res.Value<int?>("AverageConfidence") ?? -1;
-
+         Summary = $"[{VariableName}]=[{Text.Replace("\r", "\\r").Replace("\n", "\\n")}]";
       }
    }
 

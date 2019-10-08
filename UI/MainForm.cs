@@ -74,6 +74,7 @@ namespace FormsDemo
       }
       
       private static HashSet<string> DoneFormsSet = new HashSet<string>();
+
       [STAThread]
       static void Main()
       {
@@ -86,8 +87,8 @@ namespace FormsDemo
             .Select(x => x.Skip(1).Take(x.Length - 2).ToArray())
             .Select(x => string.Join(" ", x))
             .ToHashSet();
-            //.Select(x => x.GetType()  " ".Join())
-            //.ToHashSet<string>();
+         //.Select(x => x.GetType()  " ".Join())
+         //.ToHashSet<string>();
          var state = 0;
          var keeper = new Dictionary<string, OcrRecord>();
          OcrRecord curRecord = null;
@@ -102,12 +103,13 @@ namespace FormsDemo
                   if (line.Contains("|Recognized"))
                   {
                      var tup = OcrRecord.FindAppID(line);
-                     
+
                      if (tup.Item3 > 0)
                      {
                         curRecord = OcrRecord.GetOrCreate(tup.Item1, keeper);
                         curRecord.Files.Add(tup.Item2);
                      }
+
                      state = 1;
                   }
                   else if (line.Contains("|Unrecognized"))
@@ -118,6 +120,7 @@ namespace FormsDemo
                         curRecord = OcrRecord.GetOrCreate(tup.Item1, keeper);
                         curRecord.Files.Add(tup.Item2);
                      }
+
                      state = 0;
                   }
 
@@ -162,6 +165,7 @@ namespace FormsDemo
                            curRecord.AddField(f);
                         }
                      }
+
                      //sb.Append(line);
                      state = 0;
                   }
@@ -172,22 +176,27 @@ namespace FormsDemo
             lastline = line;
          }
 
-         File.WriteAllText(@"F:\EC_sample_OCR.json", JsonConvert.SerializeObject(keeper.Values,Formatting.Indented));
+         File.WriteAllText(@"F:\EC_sample_OCR.json", JsonConvert.SerializeObject(keeper.Values, Formatting.Indented));
 
          Boolean bLocked = RasterSupport.IsLocked(RasterSupportType.Forms);
          if (bLocked)
-            MessageBox.Show("Forms support must be unlocked for this demo!", "Support Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            MessageBox.Show("Forms support must be unlocked for this demo!", "Support Error", MessageBoxButtons.OK,
+               MessageBoxIcon.Warning);
 
-         Boolean bOCRLocked = RasterSupport.IsLocked(RasterSupportType.OcrLEAD) & RasterSupport.IsLocked(RasterSupportType.OcrOmniPage);
+         var isLocked = RasterSupport.IsLocked(RasterSupportType.OcrOmniPage);
+         Boolean bOCRLocked = RasterSupport.IsLocked(RasterSupportType.OcrLEAD) &
+                              isLocked;
          if (bOCRLocked)
-            MessageBox.Show("OCR support must be unlocked for this demo!", "Support Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            MessageBox.Show("OCR support must be unlocked for this demo!", "Support Error", MessageBoxButtons.OK,
+               MessageBoxIcon.Warning);
 
          if (bLocked | bOCRLocked)
             return;
 
          Application.EnableVisualStyles();
          Application.SetCompatibleTextRenderingDefault(false);
-         Application.Run(new MainForm());
+         var mf = new MainForm();
+         Application.Run(mf);
       }
 
       protected override void OnLoad(EventArgs e)
@@ -308,7 +317,6 @@ namespace FormsDemo
          {
             recognitionInProcess = true;
             UpdateControls();
-
             using (FolderBrowserDialogEx fbd = new FolderBrowserDialogEx())
             {
                fbd.SelectedPath = GetSamplesPath();
@@ -336,6 +344,7 @@ namespace FormsDemo
                            _lblStatus.Text = "Status: NA";
                            //Load the image
                            newForm.Image = LoadImageFile(file, 1, -1);
+
                            //Run the recognition and processing
                            if (RunFormRecognitionAndProcessing(newForm))
                               recognizedForms.Add(newForm);
@@ -361,6 +370,18 @@ namespace FormsDemo
             recognitionInProcess = false;
             UpdateControls();
          }
+      }
+
+      private static void LineRemoveCommand(LineRemoveCommandType type, RasterImage image)
+      {
+         LineRemoveCommand command = new LineRemoveCommand();
+         command.Type = type;
+         command.Flags = LineRemoveCommandFlags.RemoveEntire;
+         command.MaximumLineWidth = 8;
+         command.MinimumLineLength = 30;
+         command.MaximumWallPercent = 10;
+         command.Wall = 10;
+         command.Run(image);
       }
 
       private void _menuItemRecognizeSingleForm_Click(object sender, EventArgs e)
@@ -1170,6 +1191,17 @@ namespace FormsDemo
          bRecognizedSimple = RecognizeFormSimple(form);
          if (!bRecognizedSimple)
             bRecognizedComplex = RecognizeFormComplex(form);
+         var colorResolution =
+            new ColorResolutionCommand
+            {
+               BitsPerPixel = 1,
+               DitheringMethod = Leadtools.RasterDitheringMethod.None,
+               PaletteFlags = Leadtools.ImageProcessing.ColorResolutionCommandPaletteFlags.Fixed
+            };
+
+         colorResolution.Run(form.Image);
+         LineRemoveCommand(LineRemoveCommandType.Horizontal, form.Image);
+         LineRemoveCommand(LineRemoveCommandType.Vertical, form.Image);
 
          if (!canceled && (bRecognizedSimple | bRecognizedComplex))
          {
@@ -1192,6 +1224,8 @@ namespace FormsDemo
             }
             else
                AlignForm(form, false);
+
+
 
             ProcessForm(form);
             logger.Info($"Recognized {form.FileName} {form.Master?.Properties.Name}");
